@@ -7,28 +7,40 @@ const app = express();
 app.use(cors());
 app.use(bodyParser.json());
 
-/// 🔥 FAKE DATABASE (later can move to MongoDB)
-let licenses = {
-  "ABC123-XYZ789": {
-    device_id: null,
-    status: "active"
-  }
-};
+const ADMIN_KEY = "ZOORAVAR_SECURE_786";
 
-/// 🔑 GENERATE KEY (ADMIN API)
+/// 🔥 DATABASE (can move to MongoDB later)
+let licenses = {};
+
+/// 🔑 GENERATE LICENSE (ADMIN)
 app.get('/generate', (req, res) => {
 
-  const key = uuidv4().split('-').join('').substring(0,12).toUpperCase();
+  const adminKey = req.headers['admin-key'];
+
+  if (adminKey !== ADMIN_KEY) {
+    return res.status(403).json({ error: "Unauthorized" });
+  }
+
+  const key = uuidv4().split('-').join('').substring(0, 12).toUpperCase();
+
+  /// Default expiry: 30 days
+  const expiryDate = new Date();
+  expiryDate.setDate(expiryDate.getDate() + 30);
 
   licenses[key] = {
     device_id: null,
-    status: "active"
+    status: "active", // active / revoked
+    expiry: expiryDate
   };
 
-  res.json({ key });
+  res.json({
+    key,
+    expiry: expiryDate
+  });
 });
 
-/// 🔐 ACTIVATE LICENSE
+
+/// 🔐 ACTIVATE
 app.post('/activate', (req, res) => {
 
   const { key, device_id } = req.body;
@@ -37,23 +49,35 @@ app.post('/activate', (req, res) => {
     return res.json({ status: "invalid" });
   }
 
+  const license = licenses[key];
+
+  /// ❌ revoked
+  if (license.status === "revoked") {
+    return res.json({ status: "revoked" });
+  }
+
+  /// ⏳ expired
+  if (new Date() > new Date(license.expiry)) {
+    return res.json({ status: "expired" });
+  }
+
   /// First time activation
-  if (licenses[key].device_id === null) {
-    licenses[key].device_id = device_id;
+  if (license.device_id === null) {
+    license.device_id = device_id;
     return res.json({ status: "activated" });
   }
 
   /// Same device
-  if (licenses[key].device_id === device_id) {
+  if (license.device_id === device_id) {
     return res.json({ status: "valid" });
   }
 
-  /// Different device
+  /// ❌ different device
   return res.json({ status: "used_on_other_device" });
 });
 
 
-/// 🔍 CHECK LICENSE (optional)
+/// 🔍 CHECK LICENSE
 app.post('/check', (req, res) => {
 
   const { key, device_id } = req.body;
@@ -62,13 +86,59 @@ app.post('/check', (req, res) => {
     return res.json({ status: "invalid" });
   }
 
-  if (licenses[key].device_id === device_id) {
+  const license = licenses[key];
+
+  if (license.status === "revoked") {
+    return res.json({ status: "revoked" });
+  }
+
+  if (new Date() > new Date(license.expiry)) {
+    return res.json({ status: "expired" });
+  }
+
+  if (license.device_id === device_id) {
     return res.json({ status: "valid" });
   }
 
   return res.json({ status: "invalid" });
 });
 
+
+/// ❌ REVOKE LICENSE (ADMIN)
+app.post('/revoke', (req, res) => {
+
+  const adminKey = req.headers['admin-key'];
+
+  if (adminKey !== ADMIN_KEY) {
+    return res.status(403).json({ error: "Unauthorized" });
+  }
+
+  const { key } = req.body;
+
+  if (!licenses[key]) {
+    return res.json({ status: "invalid" });
+  }
+
+  licenses[key].status = "revoked";
+
+  return res.json({ status: "revoked_successfully" });
+});
+
+
+/// 📋 LIST ALL LICENSES (ADMIN)
+app.get('/licenses', (req, res) => {
+
+  const adminKey = req.headers['admin-key'];
+
+  if (adminKey !== ADMIN_KEY) {
+    return res.status(403).json({ error: "Unauthorized" });
+  }
+
+  res.json(licenses);
+});
+
+
+/// 🚀 SERVER START
 const PORT = process.env.PORT || 4000;
 
 app.listen(PORT, () => {
