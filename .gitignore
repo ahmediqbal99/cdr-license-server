@@ -1,3 +1,8 @@
 node_modules/
 firebase-key.json
 .env
+
+# misc
+*.log
+*.tmp
+.DS_Store
