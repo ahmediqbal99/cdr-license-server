@@ -1,156 +1,191 @@
 <!DOCTYPE html>
 <html>
+
 <head>
-  <title>License Admin</title>
+    <title>License Admin</title>
 
-  <style>
-    body {
-      font-family: Arial;
-      background: #0f172a;
-      color: white;
-      padding: 20px;
-    }
+    <style>
+        body {
+          font-family: Arial;
+          background: #0f172a;
+          color: white;
+          padding: 20px;
+        }
 
-    h2 { margin-bottom: 10px; }
+        button {
+          padding: 10px 15px;
+          margin: 5px;
+          border: none;
+          border-radius: 6px;
+          cursor: pointer;
+          background: #2563eb;
+          color: white;
+        }
 
-    button {
-      padding: 10px 15px;
-      margin: 5px;
-      border: none;
-      border-radius: 6px;
-      cursor: pointer;
-      background: #2563eb;
-      color: white;
-    }
+        table {
+          width: 100%;
+          margin-top: 20px;
+          border-collapse: collapse;
+        }
 
-    table {
-      width: 100%;
-      margin-top: 20px;
-      border-collapse: collapse;
-    }
+        th, td {
+          padding: 10px;
+          border: 1px solid #333;
+          text-align: center;
+        }
 
-    th, td {
-      padding: 10px;
-      border: 1px solid #333;
-      text-align: center;
-    }
+        .revoked { color: red; }
+        .active { color: lightgreen; }
+        .expired { color: orange; }
+        .lifetime { color: cyan; font-weight: bold; }
 
-    .revoked { color: red; }
-    .active { color: lightgreen; }
-    .expired { color: orange; }
-  </style>
+        input {
+          padding: 10px;
+          margin: 10px;
+        }
+    </style>
 </head>
 
 <body>
 
-<h2>🔑 License Dashboard</h2>
-
-<div>
-  <button onclick="generate(30)">Generate 30 Days</button>
-  <button onclick="generate(90)">Generate 90 Days</button>
-  <button onclick="generate(3650)">Lifetime</button>
+<!-- 🔐 LOGIN -->
+<div id="loginBox">
+    <h3>🔐 Admin Login</h3>
+    <input id="password" type="password" placeholder="Enter password">
+    <button onclick="login()">Login</button>
 </div>
 
-<h3 id="newKey"></h3>
+<!-- 🔥 DASHBOARD -->
+<div id="dashboard" style="display:none;">
 
-<table>
-  <thead>
-    <tr>
-      <th>Key</th>
-      <th>Device</th>
-      <th>Status</th>
-      <th>Expiry</th>
-      <th>Action</th>
-    </tr>
-  </thead>
-  <tbody id="tableBody"></tbody>
-</table>
+    <h2>🔑 License Dashboard</h2>
+
+    <button onclick="generate('30')">Generate 30 Days</button>
+    <button onclick="generate('90')">Generate 90 Days</button>
+    <button onclick="generate('lifetime')">Lifetime</button>
+
+    <h3 id="newKey"></h3>
+
+    <table>
+        <thead>
+        <tr>
+            <th>Key</th>
+            <th>Device</th>
+            <th>Status</th>
+            <th>Expiry</th>
+            <th>Action</th>
+        </tr>
+        </thead>
+        <tbody id="tableBody"></tbody>
+    </table>
+
+</div>
 
 <script>
 
-const baseUrl = "https://cdr-license-server.onrender.com"; // your URL
-const ADMIN_KEY = "ZOORAVAR_SECURE_786";
+    const baseUrl = "https://cdr-license-server.onrender.com";
+    const ADMIN_KEY = "ZOORAVAR_SECURE_786";
+    const ADMIN_PASSWORD = "786786"; // change this
 
-/// 🔑 Generate License
-async function generate(days) {
+    /// 🔐 LOGIN
+    function login() {
 
-  const res = await fetch(`${baseUrl}/generate?days=${days}`, {
-    headers: { "admin-key": ADMIN_KEY }
-  });
+      const pass = document.getElementById("password").value;
 
-  const data = await res.json();
-
-  document.getElementById("newKey").innerText =
-    "New Key: " + data.key;
-
-  loadLicenses();
-}
-
-/// 📋 Load Licenses (FROM FIREBASE)
-async function loadLicenses() {
-
-  const res = await fetch(`${baseUrl}/licenses`, {
-    headers: { "admin-key": ADMIN_KEY }
-  });
-
-  const data = await res.json();
-
-  const body = document.getElementById("tableBody");
-  body.innerHTML = "";
-
-  data.forEach(l => {
-
-    let statusClass = "active";
-
-    if (l.status === "revoked") statusClass = "revoked";
-    if (new Date() > new Date(l.expiry._seconds * 1000)) {
-      statusClass = "expired";
+      if (pass === ADMIN_PASSWORD) {
+        document.getElementById("loginBox").style.display = "none";
+        document.getElementById("dashboard").style.display = "block";
+        loadLicenses();
+      } else {
+        alert("Wrong password");
+      }
     }
 
-    const expiryDate = l.expiry._seconds
-      ? new Date(l.expiry._seconds * 1000)
-      : new Date(l.expiry);
+    /// 🔑 GENERATE
+    async function generate(type) {
 
-    const row = `
-      <tr>
-        <td>${l.key}</td>
-        <td>${l.device_id || "-"}</td>
-        <td class="${statusClass}">${l.status}</td>
-        <td>${expiryDate.toLocaleDateString()}</td>
-        <td>
-          <button onclick="revoke('${l.key}')">Revoke</button>
-        </td>
-      </tr>
-    `;
+      const res = await fetch(`${baseUrl}/generate?type=${type}`, {
+        headers: { "admin-key": ADMIN_KEY }
+      });
 
-    body.innerHTML += row;
-  });
-}
+      const data = await res.json();
 
-/// ❌ Revoke
-async function revoke(key) {
+      document.getElementById("newKey").innerText =
+        "New Key: " + data.key;
 
-  await fetch(`${baseUrl}/revoke`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "admin-key": ADMIN_KEY
-    },
-    body: JSON.stringify({ key })
-  });
+      loadLicenses();
+    }
 
-  loadLicenses();
-}
+    /// 📋 LOAD
+    async function loadLicenses() {
 
-/// 🔄 Auto refresh every 5 sec
-setInterval(loadLicenses, 5000);
+      const res = await fetch(`${baseUrl}/licenses`, {
+        headers: { "admin-key": ADMIN_KEY }
+      });
 
-loadLicenses();
+      const data = await res.json();
+
+      const body = document.getElementById("tableBody");
+      body.innerHTML = "";
+
+      data.forEach(l => {
+
+        let statusClass = "active";
+        let expiryText = "LIFETIME";
+
+        if (l.status === "revoked") statusClass = "revoked";
+
+        if (l.expiry) {
+
+          const expiryDate = l.expiry._seconds
+            ? new Date(l.expiry._seconds * 1000)
+            : new Date(l.expiry);
+
+          expiryText = expiryDate.toLocaleDateString();
+
+          if (new Date() > expiryDate) {
+            statusClass = "expired";
+          }
+
+        } else {
+          statusClass = "lifetime";
+        }
+
+        const row = `
+          <tr>
+            <td>${l.key}</td>
+            <td>${l.device_id || "-"}</td>
+            <td class="${statusClass}">${l.status}</td>
+            <td>${expiryText}</td>
+            <td>
+              <button onclick="revoke('${l.key}')">Revoke</button>
+            </td>
+          </tr>
+        `;
+
+        body.innerHTML += row;
+      });
+    }
+
+    /// ❌ REVOKE
+    async function revoke(key) {
+
+      await fetch(`${baseUrl}/revoke`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "admin-key": ADMIN_KEY
+        },
+        body: JSON.stringify({ key })
+      });
+
+      loadLicenses();
+    }
+
+    /// 🔄 AUTO REFRESH
+    setInterval(loadLicenses, 5000);
 
 </script>
 
 </body>
-<<<<<<< HEAD
-</html>
-=======
 </html>

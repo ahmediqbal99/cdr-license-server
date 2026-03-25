@@ -24,6 +24,7 @@ const ADMIN_KEY = process.env.ADMIN_KEY;
 app.get('/generate', async (req, res) => {
 
   const adminKey = req.headers['admin-key'];
+  const type = req.query.type || "30";
 
   if (adminKey !== ADMIN_KEY) {
     return res.status(403).json({ error: "Unauthorized" });
@@ -31,18 +32,32 @@ app.get('/generate', async (req, res) => {
 
   const key = uuidv4().replace(/-/g,'').substring(0,12).toUpperCase();
 
-  const expiryDate = new Date();
-  expiryDate.setDate(expiryDate.getDate() + 30);
+  let expiryDate = null;
+
+  if (type === "30") {
+    expiryDate = new Date();
+    expiryDate.setDate(expiryDate.getDate() + 30);
+  }
+
+  if (type === "90") {
+    expiryDate = new Date();
+    expiryDate.setDate(expiryDate.getDate() + 90);
+  }
+
+  if (type === "lifetime") {
+    expiryDate = null; // 🔥 IMPORTANT
+  }
 
   await db.collection('licenses').doc(key).set({
     key,
     device_id: null,
     status: "active",
     expiry: expiryDate,
+    type: type,
     createdAt: new Date()
   });
 
-  res.json({ key, expiry: expiryDate });
+  res.json({ key, expiry: expiryDate, type });
 });
 
 
@@ -59,7 +74,7 @@ app.post('/activate', async (req, res) => {
 
   if (data.status === "revoked") return res.json({ status: "revoked" });
 
-  if (new Date() > data.expiry.toDate()) return res.json({ status: "expired" });
+  if (data.expiry && new Date() > data.expiry.toDate()) return res.json({ status: "expired" });
 
   if (data.device_id === null) {
     await doc.ref.update({ device_id });
