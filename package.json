@@ -6,10 +6,10 @@
     "start": "node server.js"
   },
   "dependencies": {
-  "firebase-admin": "^latest",
-  "express": "...",
-  "cors": "...",
-  "body-parser": "...",
-  "uuid": "..."
-}
+    "body-parser": "...",
+    "cors": "...",
+    "express": "...",
+    "firebase-admin": "^11.11.1",
+    "uuid": "..."
+  }
 }
