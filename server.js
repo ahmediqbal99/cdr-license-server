@@ -7,7 +7,7 @@ const app = express();
 app.use(cors());
 app.use(bodyParser.json());
 
-const ADMIN_KEY = "ZOORAVAR_SECURE_786";
+const ADMIN_KEY = process.env.ADMIN_KEY;
 
 /// 🔥 DATABASE (can move to MongoDB later)
 let licenses = {};
