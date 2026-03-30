@@ -63,27 +63,48 @@ app.get('/generate', async (req, res) => {
 
 /// 🔐 ACTIVATE
 app.post('/activate', async (req, res) => {
+  try {
 
-  const { key, device_id } = req.body;
+    const { key, device_id } = req.body;
 
-  const doc = await db.collection('licenses').doc(key).get();
+    const doc = await db.collection('licenses').doc(key).get();
 
-  if (!doc.exists) return res.json({ status: "invalid" });
+    if (!doc.exists) return res.json({ status: "invalid" });
 
-  const data = doc.data();
+    const data = doc.data();
 
-  if (data.status === "revoked") return res.json({ status: "revoked" });
+    if (data.status === "revoked")
+      return res.json({ status: "revoked" });
 
-  if (data.expiry && new Date() > data.expiry.toDate()) return res.json({ status: "expired" });
+    /// ✅ FIXED expiry handling
+    if (data.expiry) {
+      let expiryDate;
 
-  if (data.device_id === null) {
-    await doc.ref.update({ device_id });
-    return res.json({ status: "activated" });
+      if (data.expiry.toDate) {
+        expiryDate = data.expiry.toDate();
+      } else {
+        expiryDate = new Date(data.expiry);
+      }
+
+      if (new Date() > expiryDate) {
+        return res.json({ status: "expired" });
+      }
+    }
+
+    if (data.device_id === null) {
+      await doc.ref.update({ device_id });
+      return res.json({ status: "activated" });
+    }
+
+    if (data.device_id === device_id)
+      return res.json({ status: "valid" });
+
+    return res.json({ status: "used_on_other_device" });
+
+  } catch (e) {
+    console.log("ACTIVATE ERROR:", e);
+    return res.json({ status: "server_error" });
   }
-
-  if (data.device_id === device_id) return res.json({ status: "valid" });
-
-  return res.json({ status: "used_on_other_device" });
 });
 
 
