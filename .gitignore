@@ -1,0 +1,8 @@
+node_modules/
+.dart_tool/
+build/
+windows/
+*.dll
+*.exe
+.idea/
+.metadata
