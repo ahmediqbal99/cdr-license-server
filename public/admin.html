@@ -98,7 +98,7 @@
 <!-- 🔥 DASHBOARD -->
 <div id="dashboard" style="display:none;">
 
-    <h2>🔑 License Dashboard</h2>
+    <h2>🔑 License Dashboard <button class="danger" onclick="logout()" style="float:right; font-size: 0.5em;">Logout</button></h2>
 
     <div class="tabs">
         <button class="tab-btn active" id="tabBtn-cdr_analyzer" onclick="switchTab('cdr_analyzer')">CDR Analyzer</button>
@@ -154,21 +154,73 @@
 <script>
 
     const baseUrl = "https://cdr-license-server.onrender.com";
-    const ADMIN_KEY = "ZOORAVAR_SECURE_786";
-    const ADMIN_PASSWORD = "786786"; // change this
+
+    // The password and the API key used to live here, in plain sight to anyone who opened
+    // dev tools or viewed page source - that's gone now. All that's kept client-side is an
+    // opaque, short-lived session token issued by POST /login after the real password check
+    // happens server-side. sessionStorage (not localStorage) so it clears when the tab closes.
+    let sessionToken = sessionStorage.getItem("session_token");
+
+    function authHeaders(extra = {}) {
+      return { "session-token": sessionToken, ...extra };
+    }
 
     /// 🔐 LOGIN
-    function login() {
+    async function login() {
 
       const pass = document.getElementById("password").value;
 
-      if (pass === ADMIN_PASSWORD) {
-        document.getElementById("loginBox").style.display = "none";
-        document.getElementById("dashboard").style.display = "block";
-        loadLicenses();
-      } else {
-        alert("Wrong password");
+      try {
+        const res = await fetch(`${baseUrl}/login`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ password: pass })
+        });
+
+        if (!res.ok) {
+          alert("Wrong password");
+          return;
+        }
+
+        const data = await res.json();
+        sessionToken = data.token;
+        sessionStorage.setItem("session_token", sessionToken);
+        showDashboard();
+
+      } catch (e) {
+        alert("Couldn't reach the server. Check your connection.");
       }
+    }
+
+    function showDashboard() {
+      document.getElementById("loginBox").style.display = "none";
+      document.getElementById("dashboard").style.display = "block";
+      loadLicenses();
+    }
+
+    function logout() {
+      sessionStorage.removeItem("session_token");
+      sessionToken = null;
+      document.getElementById("dashboard").style.display = "none";
+      document.getElementById("loginBox").style.display = "block";
+    }
+
+    // Resume an existing session on page load/refresh, instead of asking for the password
+    // again every time - loadLicenses() itself will bounce back to the login box via
+    // handleAuthResponse() if this token has since expired or the server restarted.
+    if (sessionToken) {
+      showDashboard();
+    }
+
+    /// Centralizes the "session expired or invalid -> back to login" behavior so every
+    /// fetch call below doesn't have to repeat it.
+    async function handleAuthResponse(res) {
+      if (res.status === 403) {
+        alert("Your session expired. Please log in again.");
+        logout();
+        return null;
+      }
+      return res;
     }
 
     /// 🔀 TABS
@@ -182,9 +234,11 @@
     /// 🔑 GENERATE
     async function generate(product, type) {
 
-      const res = await fetch(`${baseUrl}/generate?type=${type}&product=${product}`, {
-        headers: { "admin-key": ADMIN_KEY }
+      let res = await fetch(`${baseUrl}/generate?type=${type}&product=${product}`, {
+        headers: authHeaders()
       });
+      res = await handleAuthResponse(res);
+      if (!res) return;
 
       const data = await res.json();
 
@@ -196,9 +250,11 @@
     /// 📋 LOAD
     async function loadLicenses() {
 
-      const res = await fetch(`${baseUrl}/licenses`, {
-        headers: { "admin-key": ADMIN_KEY }
+      let res = await fetch(`${baseUrl}/licenses`, {
+        headers: authHeaders()
       });
+      res = await handleAuthResponse(res);
+      if (!res) return;
 
       const data = await res.json();
 
@@ -287,14 +343,13 @@
         return;
       }
 
-      await fetch(`${baseUrl}/renew`, {
+      let res = await fetch(`${baseUrl}/renew`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "admin-key": ADMIN_KEY
-        },
+        headers: authHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ key, type })
       });
+      res = await handleAuthResponse(res);
+      if (!res) return;
 
       loadLicenses();
     }
@@ -305,27 +360,24 @@
       const input = document.getElementById(`name-${key}`);
       const name = input.value;
 
-      await fetch(`${baseUrl}/set-name`, {
+      const res = await fetch(`${baseUrl}/set-name`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "admin-key": ADMIN_KEY
-        },
+        headers: authHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ key, name })
       });
+      await handleAuthResponse(res);
     }
 
     /// ❌ REVOKE
     async function revoke(key) {
 
-      await fetch(`${baseUrl}/revoke`, {
+      let res = await fetch(`${baseUrl}/revoke`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "admin-key": ADMIN_KEY
-        },
+        headers: authHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ key })
       });
+      res = await handleAuthResponse(res);
+      if (!res) return;
 
       loadLicenses();
     }
@@ -335,22 +387,23 @@
 
       if (!confirm(`Permanently delete key ${key}? This can't be undone.`)) return;
 
-      await fetch(`${baseUrl}/delete`, {
+      let res = await fetch(`${baseUrl}/delete`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "admin-key": ADMIN_KEY
-        },
+        headers: authHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ key })
       });
+      res = await handleAuthResponse(res);
+      if (!res) return;
 
       loadLicenses();
     }
 
     /// 🔄 AUTO REFRESH
-    // Paused while a name input has focus, so typing isn't wiped out mid-edit by the
-    // periodic reload racing the admin's keystrokes.
+    // Paused while logged out (no point hitting an endpoint that'll just 403) and while a
+    // name input has focus, so typing isn't wiped out mid-edit by the periodic reload
+    // racing the admin's keystrokes.
     setInterval(() => {
+      if (!sessionToken) return;
       if (document.activeElement && document.activeElement.tagName === "INPUT") return;
       loadLicenses();
     }, 5000);

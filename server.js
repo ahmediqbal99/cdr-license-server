@@ -11,6 +11,7 @@ const db = admin.firestore();
 const express = require('express');
 const cors = require('cors');
 const bodyParser = require('body-parser');
+const crypto = require('crypto');
 const { v4: uuidv4 } = require('uuid');
 
 const app = express();
@@ -18,7 +19,45 @@ app.use(cors());
 app.use(bodyParser.json());
 app.use(express.static('public'));
 
-const ADMIN_KEY = process.env.ADMIN_KEY;
+// This used to double as the secret that admin.html put directly into client-side JS -
+// anyone who viewed the page source got both the login password AND the API key that
+// bypasses it entirely. It's now purely a server-side secret: the password an admin types
+// at /login, checked here and never sent back to the browser. See requireSession() below
+// for what admin.html actually holds after logging in (a short-lived opaque token, not
+// this value).
+const ADMIN_PASSWORD = process.env.ADMIN_KEY;
+
+// 🔐 SESSIONS - in-memory on purpose. This is a small single-instance admin tool, not
+// something that needs Redis; a Render restart just means logging in again, which is fine.
+const SESSION_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const sessions = new Map(); // token -> expiry timestamp (ms)
+
+function createSession() {
+  const token = crypto.randomBytes(24).toString('hex');
+  sessions.set(token, Date.now() + SESSION_TTL_MS);
+  return token;
+}
+
+function requireSession(req, res) {
+  const token = req.headers['session-token'];
+  const expiry = token && sessions.get(token);
+
+  if (!expiry || Date.now() > expiry) {
+    if (token) sessions.delete(token); // expired - stop tracking it
+    res.status(403).json({ error: "Unauthorized" });
+    return false;
+  }
+
+  return true;
+}
+
+// Idle session cleanup, so `sessions` doesn't grow unbounded across a long server lifetime.
+setInterval(() => {
+  const now = Date.now();
+  for (const [token, expiry] of sessions) {
+    if (now > expiry) sessions.delete(token);
+  }
+}, 60 * 60 * 1000);
 
 // 🛡️ SAFETY NET: an unhandled promise rejection (e.g. .update() on a license doc that
 // doesn't exist) terminates the whole Node process on modern Node by default - confirmed
@@ -29,20 +68,31 @@ process.on('unhandledRejection', (err) => {
   console.error('UNHANDLED REJECTION (server stayed up):', err);
 });
 
+
+/// 🔐 LOGIN - the only endpoint that ever sees ADMIN_PASSWORD. Success gets a session
+/// token; the password itself never goes anywhere else, including back to the browser.
+app.post('/login', (req, res) => {
+  const { password } = req.body;
+
+  if (password !== ADMIN_PASSWORD) {
+    return res.status(401).json({ error: "wrong_password" });
+  }
+
+  res.json({ token: createSession() });
+});
+
+
 /// 🔑 GENERATE LICENSE
 app.get('/generate', async (req, res) => {
   try {
 
-    const adminKey = req.headers['admin-key'];
+    if (!requireSession(req, res)) return;
+
     const type = req.query.type || "30";
     // Defaults to the product every key predates this field was for, so this stays a no-op
     // for any caller (like the existing admin dashboard, until it's updated) that doesn't
     // pass one yet.
     const product = req.query.product || "cdr_analyzer";
-
-    if (adminKey !== ADMIN_KEY) {
-      return res.status(403).json({ error: "Unauthorized" });
-    }
 
     const key = uuidv4().replace(/-/g,'').substring(0,12).toUpperCase();
 
@@ -82,7 +132,8 @@ app.get('/generate', async (req, res) => {
 });
 
 
-/// 🔐 ACTIVATE
+/// 🔐 ACTIVATE (called by the CDR Analyzer / Extractor apps themselves, not the admin
+/// dashboard - unauthenticated by design, gated only by needing a real license key)
 app.post('/activate', async (req, res) => {
   try {
 
@@ -144,11 +195,7 @@ app.post('/activate', async (req, res) => {
 app.get('/licenses', async (req, res) => {
   try {
 
-    const adminKey = req.headers['admin-key'];
-
-    if (adminKey !== ADMIN_KEY) {
-      return res.status(403).json({ error: "Unauthorized" });
-    }
+    if (!requireSession(req, res)) return;
 
     const snapshot = await db.collection('licenses').get();
 
@@ -167,11 +214,7 @@ app.get('/licenses', async (req, res) => {
 app.post('/set-name', async (req, res) => {
   try {
 
-    const adminKey = req.headers['admin-key'];
-
-    if (adminKey !== ADMIN_KEY) {
-      return res.status(403).json({ error: "Unauthorized" });
-    }
+    if (!requireSession(req, res)) return;
 
     const { key, name } = req.body;
 
@@ -193,11 +236,7 @@ app.post('/set-name', async (req, res) => {
 app.post('/revoke', async (req, res) => {
   try {
 
-    const adminKey = req.headers['admin-key'];
-
-    if (adminKey !== ADMIN_KEY) {
-      return res.status(403).json({ error: "Unauthorized" });
-    }
+    if (!requireSession(req, res)) return;
 
     const { key } = req.body;
 
@@ -220,11 +259,7 @@ app.post('/revoke', async (req, res) => {
 app.post('/renew', async (req, res) => {
   try {
 
-    const adminKey = req.headers['admin-key'];
-
-    if (adminKey !== ADMIN_KEY) {
-      return res.status(403).json({ error: "Unauthorized" });
-    }
+    if (!requireSession(req, res)) return;
 
     const { key, type } = req.body;
 
@@ -262,11 +297,7 @@ app.post('/renew', async (req, res) => {
 app.post('/delete', async (req, res) => {
   try {
 
-    const adminKey = req.headers['admin-key'];
-
-    if (adminKey !== ADMIN_KEY) {
-      return res.status(403).json({ error: "Unauthorized" });
-    }
+    if (!requireSession(req, res)) return;
 
     const { key } = req.body;
 
