@@ -22,6 +22,10 @@
           color: white;
         }
 
+        button.danger {
+          background: #b91c1c;
+        }
+
         table {
           width: 100%;
           margin-top: 20px;
@@ -40,8 +44,44 @@
         .lifetime { color: cyan; font-weight: bold; }
 
         input {
-          padding: 10px;
-          margin: 10px;
+          padding: 8px;
+          margin: 0;
+          width: 120px;
+          border-radius: 4px;
+          border: 1px solid #333;
+        }
+
+        .name-cell {
+          display: flex;
+          gap: 4px;
+          justify-content: center;
+          align-items: center;
+        }
+
+        .name-cell button {
+          padding: 6px 10px;
+          margin: 0;
+        }
+
+        .tabs {
+          margin-top: 10px;
+        }
+
+        .tab-btn {
+          background: #1e293b;
+          opacity: 0.7;
+        }
+
+        .tab-btn.active {
+          background: #2563eb;
+          opacity: 1;
+        }
+
+        .tab-panel {
+          border: 1px solid #1e293b;
+          border-radius: 8px;
+          padding: 15px;
+          margin-top: 10px;
         }
     </style>
 </head>
@@ -60,24 +100,54 @@
 
     <h2>🔑 License Dashboard</h2>
 
-    <button onclick="generate('30')">Generate 30 Days</button>
-    <button onclick="generate('90')">Generate 90 Days</button>
-    <button onclick="generate('lifetime')">Lifetime</button>
+    <div class="tabs">
+        <button class="tab-btn active" id="tabBtn-cdr_analyzer" onclick="switchTab('cdr_analyzer')">CDR Analyzer</button>
+        <button class="tab-btn" id="tabBtn-extractor" onclick="switchTab('extractor')">Zooravar Extractor</button>
+    </div>
 
-    <h3 id="newKey"></h3>
+    <div id="panel-cdr_analyzer" class="tab-panel">
+        <button onclick="generate('cdr_analyzer', '30')">Generate 30 Days</button>
+        <button onclick="generate('cdr_analyzer', '90')">Generate 90 Days</button>
+        <button onclick="generate('cdr_analyzer', 'lifetime')">Lifetime</button>
 
-    <table>
-        <thead>
-        <tr>
-            <th>Key</th>
-            <th>Device</th>
-            <th>Status</th>
-            <th>Expiry</th>
-            <th>Action</th>
-        </tr>
-        </thead>
-        <tbody id="tableBody"></tbody>
-    </table>
+        <h3 id="newKey-cdr_analyzer"></h3>
+
+        <table>
+            <thead>
+            <tr>
+                <th>Key</th>
+                <th>Name</th>
+                <th>Device</th>
+                <th>Status</th>
+                <th>Expiry</th>
+                <th>Action</th>
+            </tr>
+            </thead>
+            <tbody id="tableBody-cdr_analyzer"></tbody>
+        </table>
+    </div>
+
+    <div id="panel-extractor" class="tab-panel" style="display:none;">
+        <button onclick="generate('extractor', '30')">Generate 30 Days</button>
+        <button onclick="generate('extractor', '90')">Generate 90 Days</button>
+        <button onclick="generate('extractor', 'lifetime')">Lifetime</button>
+
+        <h3 id="newKey-extractor"></h3>
+
+        <table>
+            <thead>
+            <tr>
+                <th>Key</th>
+                <th>Name</th>
+                <th>Device</th>
+                <th>Status</th>
+                <th>Expiry</th>
+                <th>Action</th>
+            </tr>
+            </thead>
+            <tbody id="tableBody-extractor"></tbody>
+        </table>
+    </div>
 
 </div>
 
@@ -101,17 +171,24 @@
       }
     }
 
-    /// 🔑 GENERATE
-    async function generate(type) {
+    /// 🔀 TABS
+    function switchTab(product) {
+      for (const p of ["cdr_analyzer", "extractor"]) {
+        document.getElementById(`panel-${p}`).style.display = (p === product) ? "block" : "none";
+        document.getElementById(`tabBtn-${p}`).classList.toggle("active", p === product);
+      }
+    }
 
-      const res = await fetch(`${baseUrl}/generate?type=${type}`, {
+    /// 🔑 GENERATE
+    async function generate(product, type) {
+
+      const res = await fetch(`${baseUrl}/generate?type=${type}&product=${product}`, {
         headers: { "admin-key": ADMIN_KEY }
       });
 
       const data = await res.json();
 
-      document.getElementById("newKey").innerText =
-        "New Key: " + data.key;
+      document.getElementById(`newKey-${product}`).innerText = "New Key: " + data.key;
 
       loadLicenses();
     }
@@ -125,8 +202,12 @@
 
       const data = await res.json();
 
-      const body = document.getElementById("tableBody");
-      body.innerHTML = "";
+      const bodies = {
+        cdr_analyzer: document.getElementById("tableBody-cdr_analyzer"),
+        extractor: document.getElementById("tableBody-extractor"),
+      };
+      bodies.cdr_analyzer.innerHTML = "";
+      bodies.extractor.innerHTML = "";
 
       data.forEach(l => {
 
@@ -151,19 +232,48 @@
           statusClass = "lifetime";
         }
 
+        // Pre-existing keys from before the `product` field existed are implicitly
+        // CDR Analyzer keys (matches the server's own fallback logic in /activate).
+        const product = l.product || "cdr_analyzer";
+        const safeKey = l.key.replace(/'/g, "\\'");
+        const body = bodies[product] || bodies.cdr_analyzer;
+
         const row = `
           <tr>
             <td>${l.key}</td>
+            <td>
+              <div class="name-cell">
+                <input type="text" id="name-${l.key}" value="${(l.name || "").replace(/"/g, '&quot;')}" placeholder="Who holds this?">
+                <button onclick="saveName('${safeKey}')">Save</button>
+              </div>
+            </td>
             <td>${l.device_id || "-"}</td>
             <td class="${statusClass}">${l.status}</td>
             <td>${expiryText}</td>
             <td>
-              <button onclick="revoke('${l.key}')">Revoke</button>
+              <button onclick="revoke('${safeKey}')">Revoke</button>
+              <button class="danger" onclick="deleteKey('${safeKey}')">Delete</button>
             </td>
           </tr>
         `;
 
         body.innerHTML += row;
+      });
+    }
+
+    /// 📝 SAVE NAME
+    async function saveName(key) {
+
+      const input = document.getElementById(`name-${key}`);
+      const name = input.value;
+
+      await fetch(`${baseUrl}/set-name`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "admin-key": ADMIN_KEY
+        },
+        body: JSON.stringify({ key, name })
       });
     }
 
@@ -182,8 +292,30 @@
       loadLicenses();
     }
 
+    /// 🗑️ DELETE
+    async function deleteKey(key) {
+
+      if (!confirm(`Permanently delete key ${key}? This can't be undone.`)) return;
+
+      await fetch(`${baseUrl}/delete`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "admin-key": ADMIN_KEY
+        },
+        body: JSON.stringify({ key })
+      });
+
+      loadLicenses();
+    }
+
     /// 🔄 AUTO REFRESH
-    setInterval(loadLicenses, 5000);
+    // Paused while a name input has focus, so typing isn't wiped out mid-edit by the
+    // periodic reload racing the admin's keystrokes.
+    setInterval(() => {
+      if (document.activeElement && document.activeElement.tagName === "INPUT") return;
+      loadLicenses();
+    }, 5000);
 
 </script>
 

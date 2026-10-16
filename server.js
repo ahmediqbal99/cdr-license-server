@@ -25,6 +25,10 @@ app.get('/generate', async (req, res) => {
 
   const adminKey = req.headers['admin-key'];
   const type = req.query.type || "30";
+  // Defaults to the product every key predates this field was for, so this stays a no-op
+  // for any caller (like the existing admin dashboard, until it's updated) that doesn't
+  // pass one yet.
+  const product = req.query.product || "cdr_analyzer";
 
   if (adminKey !== ADMIN_KEY) {
     return res.status(403).json({ error: "Unauthorized" });
@@ -54,10 +58,12 @@ app.get('/generate', async (req, res) => {
     status: "active",
     expiry: expiryDate,
     type: type,
+    product: product,
+    name: "", // 📝 filled in later by the admin from the dashboard, once they know who holds the key
     createdAt: new Date()
   });
 
-  res.json({ key, expiry: expiryDate, type });
+  res.json({ key, expiry: expiryDate, type, product });
 });
 
 
@@ -65,7 +71,11 @@ app.get('/generate', async (req, res) => {
 app.post('/activate', async (req, res) => {
   try {
 
-    const { key, device_id } = req.body;
+    const { key, device_id, product } = req.body;
+    // Same default as /generate: a caller that doesn't send `product` (the existing,
+    // unmodified CDR Analyzer app) is assumed to mean the product every key predates this
+    // field was already for - so already-issued keys keep working with zero client changes.
+    const requestedProduct = product || "cdr_analyzer";
 
     const doc = await db.collection('licenses').doc(key).get();
 
@@ -75,6 +85,13 @@ app.post('/activate', async (req, res) => {
 
     if (data.status === "revoked")
       return res.json({ status: "revoked" });
+
+    /// 🔀 PRODUCT CHECK - a CDR Analyzer key must not unlock the Extractor and vice versa.
+    /// Checked before the device-binding step below, so a wrong-product attempt never
+    /// consumes the key's one-device binding.
+    const keyProduct = data.product || "cdr_analyzer";
+    if (keyProduct !== requestedProduct)
+      return res.json({ status: "wrong_product" });
 
     /// ✅ FIXED expiry handling
     if (data.expiry) {
@@ -125,6 +142,25 @@ app.get('/licenses', async (req, res) => {
 });
 
 
+/// 📝 SET NAME (who this device/key belongs to - admin fills this in manually once they know)
+app.post('/set-name', async (req, res) => {
+
+  const adminKey = req.headers['admin-key'];
+
+  if (adminKey !== ADMIN_KEY) {
+    return res.status(403).json({ error: "Unauthorized" });
+  }
+
+  const { key, name } = req.body;
+
+  await db.collection('licenses').doc(key).update({
+    name: name || ""
+  });
+
+  res.json({ success: true });
+});
+
+
 /// ❌ REVOKE
 app.post('/revoke', async (req, res) => {
 
@@ -139,6 +175,23 @@ app.post('/revoke', async (req, res) => {
   await db.collection('licenses').doc(key).update({
     status: "revoked"
   });
+
+  res.json({ success: true });
+});
+
+
+/// 🗑️ DELETE (permanently removes the license record, unlike revoke which just flags it)
+app.post('/delete', async (req, res) => {
+
+  const adminKey = req.headers['admin-key'];
+
+  if (adminKey !== ADMIN_KEY) {
+    return res.status(403).json({ error: "Unauthorized" });
+  }
+
+  const { key } = req.body;
+
+  await db.collection('licenses').doc(key).delete();
 
   res.json({ success: true });
 });
