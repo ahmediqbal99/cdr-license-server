@@ -20,50 +20,65 @@ app.use(express.static('public'));
 
 const ADMIN_KEY = process.env.ADMIN_KEY;
 
+// 🛡️ SAFETY NET: an unhandled promise rejection (e.g. .update() on a license doc that
+// doesn't exist) terminates the whole Node process on modern Node by default - confirmed
+// the hard way, a single bad /renew request on a stale key took the entire service down
+// for every user until Render restarted it. Every route below is also wrapped in its own
+// try/catch now, but this is the backstop for anything that still slips through.
+process.on('unhandledRejection', (err) => {
+  console.error('UNHANDLED REJECTION (server stayed up):', err);
+});
+
 /// 🔑 GENERATE LICENSE
 app.get('/generate', async (req, res) => {
+  try {
 
-  const adminKey = req.headers['admin-key'];
-  const type = req.query.type || "30";
-  // Defaults to the product every key predates this field was for, so this stays a no-op
-  // for any caller (like the existing admin dashboard, until it's updated) that doesn't
-  // pass one yet.
-  const product = req.query.product || "cdr_analyzer";
+    const adminKey = req.headers['admin-key'];
+    const type = req.query.type || "30";
+    // Defaults to the product every key predates this field was for, so this stays a no-op
+    // for any caller (like the existing admin dashboard, until it's updated) that doesn't
+    // pass one yet.
+    const product = req.query.product || "cdr_analyzer";
 
-  if (adminKey !== ADMIN_KEY) {
-    return res.status(403).json({ error: "Unauthorized" });
+    if (adminKey !== ADMIN_KEY) {
+      return res.status(403).json({ error: "Unauthorized" });
+    }
+
+    const key = uuidv4().replace(/-/g,'').substring(0,12).toUpperCase();
+
+    let expiryDate = null;
+
+    if (type === "30") {
+      expiryDate = new Date();
+      expiryDate.setDate(expiryDate.getDate() + 30);
+    }
+
+    if (type === "90") {
+      expiryDate = new Date();
+      expiryDate.setDate(expiryDate.getDate() + 90);
+    }
+
+    if (type === "lifetime") {
+      expiryDate = null; // 🔥 IMPORTANT
+    }
+
+    await db.collection('licenses').doc(key).set({
+      key,
+      device_id: null,
+      status: "active",
+      expiry: expiryDate,
+      type: type,
+      product: product,
+      name: "", // 📝 filled in later by the admin from the dashboard, once they know who holds the key
+      createdAt: new Date()
+    });
+
+    res.json({ key, expiry: expiryDate, type, product });
+
+  } catch (e) {
+    console.log("GENERATE ERROR:", e);
+    res.status(500).json({ error: "server_error" });
   }
-
-  const key = uuidv4().replace(/-/g,'').substring(0,12).toUpperCase();
-
-  let expiryDate = null;
-
-  if (type === "30") {
-    expiryDate = new Date();
-    expiryDate.setDate(expiryDate.getDate() + 30);
-  }
-
-  if (type === "90") {
-    expiryDate = new Date();
-    expiryDate.setDate(expiryDate.getDate() + 90);
-  }
-
-  if (type === "lifetime") {
-    expiryDate = null; // 🔥 IMPORTANT
-  }
-
-  await db.collection('licenses').doc(key).set({
-    key,
-    device_id: null,
-    status: "active",
-    expiry: expiryDate,
-    type: type,
-    product: product,
-    name: "", // 📝 filled in later by the admin from the dashboard, once they know who holds the key
-    createdAt: new Date()
-  });
-
-  res.json({ key, expiry: expiryDate, type, product });
 });
 
 
@@ -127,121 +142,159 @@ app.post('/activate', async (req, res) => {
 
 /// 📋 LIST LICENSES
 app.get('/licenses', async (req, res) => {
+  try {
 
-  const adminKey = req.headers['admin-key'];
+    const adminKey = req.headers['admin-key'];
 
-  if (adminKey !== ADMIN_KEY) {
-    return res.status(403).json({ error: "Unauthorized" });
+    if (adminKey !== ADMIN_KEY) {
+      return res.status(403).json({ error: "Unauthorized" });
+    }
+
+    const snapshot = await db.collection('licenses').get();
+
+    const data = snapshot.docs.map(doc => doc.data());
+
+    res.json(data);
+
+  } catch (e) {
+    console.log("LICENSES ERROR:", e);
+    res.status(500).json({ error: "server_error" });
   }
-
-  const snapshot = await db.collection('licenses').get();
-
-  const data = snapshot.docs.map(doc => doc.data());
-
-  res.json(data);
 });
 
 
 /// 📝 SET NAME (who this device/key belongs to - admin fills this in manually once they know)
 app.post('/set-name', async (req, res) => {
+  try {
 
-  const adminKey = req.headers['admin-key'];
+    const adminKey = req.headers['admin-key'];
 
-  if (adminKey !== ADMIN_KEY) {
-    return res.status(403).json({ error: "Unauthorized" });
+    if (adminKey !== ADMIN_KEY) {
+      return res.status(403).json({ error: "Unauthorized" });
+    }
+
+    const { key, name } = req.body;
+
+    const doc = await db.collection('licenses').doc(key).get();
+    if (!doc.exists) return res.status(404).json({ error: "not_found" });
+
+    await doc.ref.update({ name: name || "" });
+
+    res.json({ success: true });
+
+  } catch (e) {
+    console.log("SET-NAME ERROR:", e);
+    res.status(500).json({ error: "server_error" });
   }
-
-  const { key, name } = req.body;
-
-  await db.collection('licenses').doc(key).update({
-    name: name || ""
-  });
-
-  res.json({ success: true });
 });
 
 
 /// ❌ REVOKE
 app.post('/revoke', async (req, res) => {
+  try {
 
-  const adminKey = req.headers['admin-key'];
+    const adminKey = req.headers['admin-key'];
 
-  if (adminKey !== ADMIN_KEY) {
-    return res.status(403).json({ error: "Unauthorized" });
+    if (adminKey !== ADMIN_KEY) {
+      return res.status(403).json({ error: "Unauthorized" });
+    }
+
+    const { key } = req.body;
+
+    const doc = await db.collection('licenses').doc(key).get();
+    if (!doc.exists) return res.status(404).json({ error: "not_found" });
+
+    await doc.ref.update({ status: "revoked" });
+
+    res.json({ success: true });
+
+  } catch (e) {
+    console.log("REVOKE ERROR:", e);
+    res.status(500).json({ error: "server_error" });
   }
-
-  const { key } = req.body;
-
-  await db.collection('licenses').doc(key).update({
-    status: "revoked"
-  });
-
-  res.json({ success: true });
 });
 
 
 /// 🔁 RENEW (pushes expiry forward from today; does not touch status, so a revoked key
 /// stays revoked until explicitly un-revoked - renew alone shouldn't undo a ban)
 app.post('/renew', async (req, res) => {
+  try {
 
-  const adminKey = req.headers['admin-key'];
+    const adminKey = req.headers['admin-key'];
 
-  if (adminKey !== ADMIN_KEY) {
-    return res.status(403).json({ error: "Unauthorized" });
+    if (adminKey !== ADMIN_KEY) {
+      return res.status(403).json({ error: "Unauthorized" });
+    }
+
+    const { key, type } = req.body;
+
+    const doc = await db.collection('licenses').doc(key).get();
+    if (!doc.exists) return res.status(404).json({ error: "not_found" });
+
+    let expiryDate = null;
+
+    if (type === "30") {
+      expiryDate = new Date();
+      expiryDate.setDate(expiryDate.getDate() + 30);
+    }
+
+    if (type === "90") {
+      expiryDate = new Date();
+      expiryDate.setDate(expiryDate.getDate() + 90);
+    }
+
+    if (type === "lifetime") {
+      expiryDate = null; // 🔥 IMPORTANT
+    }
+
+    await doc.ref.update({ expiry: expiryDate, type: type });
+
+    res.json({ success: true, expiry: expiryDate });
+
+  } catch (e) {
+    console.log("RENEW ERROR:", e);
+    res.status(500).json({ error: "server_error" });
   }
-
-  const { key, type } = req.body;
-
-  let expiryDate = null;
-
-  if (type === "30") {
-    expiryDate = new Date();
-    expiryDate.setDate(expiryDate.getDate() + 30);
-  }
-
-  if (type === "90") {
-    expiryDate = new Date();
-    expiryDate.setDate(expiryDate.getDate() + 90);
-  }
-
-  if (type === "lifetime") {
-    expiryDate = null; // 🔥 IMPORTANT
-  }
-
-  await db.collection('licenses').doc(key).update({
-    expiry: expiryDate,
-    type: type
-  });
-
-  res.json({ success: true, expiry: expiryDate });
 });
 
 
 /// 🗑️ DELETE (permanently removes the license record, unlike revoke which just flags it)
 app.post('/delete', async (req, res) => {
+  try {
 
-  const adminKey = req.headers['admin-key'];
+    const adminKey = req.headers['admin-key'];
 
-  if (adminKey !== ADMIN_KEY) {
-    return res.status(403).json({ error: "Unauthorized" });
+    if (adminKey !== ADMIN_KEY) {
+      return res.status(403).json({ error: "Unauthorized" });
+    }
+
+    const { key } = req.body;
+
+    await db.collection('licenses').doc(key).delete();
+
+    res.json({ success: true });
+
+  } catch (e) {
+    console.log("DELETE ERROR:", e);
+    res.status(500).json({ error: "server_error" });
   }
-
-  const { key } = req.body;
-
-  await db.collection('licenses').doc(key).delete();
-
-  res.json({ success: true });
 });
 
 
 /// 🧪 TEST
 app.get('/test', async (req, res) => {
+  try {
 
-  await db.collection('test').doc('check').set({
-    message: "Firebase connected 🚀"
-  });
+    await db.collection('test').doc('check').set({
+      message: "Firebase connected 🚀"
+    });
 
-  res.send("OK");
+    res.send("OK");
+
+  } catch (e) {
+    console.log("TEST ERROR:", e);
+    res.status(500).json({ error: "server_error" });
+  }
 });
 
 
