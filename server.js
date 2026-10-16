@@ -180,6 +180,43 @@ app.post('/revoke', async (req, res) => {
 });
 
 
+/// 🔁 RENEW (pushes expiry forward from today; does not touch status, so a revoked key
+/// stays revoked until explicitly un-revoked - renew alone shouldn't undo a ban)
+app.post('/renew', async (req, res) => {
+
+  const adminKey = req.headers['admin-key'];
+
+  if (adminKey !== ADMIN_KEY) {
+    return res.status(403).json({ error: "Unauthorized" });
+  }
+
+  const { key, type } = req.body;
+
+  let expiryDate = null;
+
+  if (type === "30") {
+    expiryDate = new Date();
+    expiryDate.setDate(expiryDate.getDate() + 30);
+  }
+
+  if (type === "90") {
+    expiryDate = new Date();
+    expiryDate.setDate(expiryDate.getDate() + 90);
+  }
+
+  if (type === "lifetime") {
+    expiryDate = null; // 🔥 IMPORTANT
+  }
+
+  await db.collection('licenses').doc(key).update({
+    expiry: expiryDate,
+    type: type
+  });
+
+  res.json({ success: true, expiry: expiryDate });
+});
+
+
 /// 🗑️ DELETE (permanently removes the license record, unlike revoke which just flags it)
 app.post('/delete', async (req, res) => {
 

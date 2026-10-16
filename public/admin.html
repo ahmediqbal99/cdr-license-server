@@ -211,12 +211,20 @@
 
       data.forEach(l => {
 
+        // `statusClass` drives styling; `statusText` is what the cell actually SAYS - these
+        // used to diverge (an expired key stayed colored orange but the cell still printed
+        // the raw DB value "active", since expiry here is a derived/computed state, never
+        // written back to `status` in Firestore). Keeping both in lockstep so the cell text
+        // itself says "expired" rather than only hinting at it through color.
         let statusClass = "active";
+        let statusText = l.status;
         let expiryText = "LIFETIME";
+        let isExpired = false;
 
-        if (l.status === "revoked") statusClass = "revoked";
-
-        if (l.expiry) {
+        if (l.status === "revoked") {
+          statusClass = "revoked";
+          statusText = "revoked";
+        } else if (l.expiry) {
 
           const expiryDate = l.expiry._seconds
             ? new Date(l.expiry._seconds * 1000)
@@ -226,10 +234,16 @@
 
           if (new Date() > expiryDate) {
             statusClass = "expired";
+            statusText = "expired";
+            isExpired = true;
+          } else {
+            statusClass = "active";
+            statusText = "active";
           }
 
         } else {
           statusClass = "lifetime";
+          statusText = "active";
         }
 
         // Pre-existing keys from before the `product` field existed are implicitly
@@ -248,9 +262,10 @@
               </div>
             </td>
             <td>${l.device_id || "-"}</td>
-            <td class="${statusClass}">${l.status}</td>
+            <td class="${statusClass}">${statusText}</td>
             <td>${expiryText}</td>
             <td>
+              ${isExpired ? `<button onclick="renew('${safeKey}')">Renew</button>` : ""}
               <button onclick="revoke('${safeKey}')">Revoke</button>
               <button class="danger" onclick="deleteKey('${safeKey}')">Delete</button>
             </td>
@@ -259,6 +274,29 @@
 
         body.innerHTML += row;
       });
+    }
+
+    /// 🔁 RENEW
+    async function renew(key) {
+
+      const type = prompt('Renew for how long? Type "30", "90", or "lifetime":', "30");
+      if (!type) return;
+
+      if (!["30", "90", "lifetime"].includes(type)) {
+        alert('Please type exactly "30", "90", or "lifetime".');
+        return;
+      }
+
+      await fetch(`${baseUrl}/renew`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "admin-key": ADMIN_KEY
+        },
+        body: JSON.stringify({ key, type })
+      });
+
+      loadLicenses();
     }
 
     /// 📝 SAVE NAME
