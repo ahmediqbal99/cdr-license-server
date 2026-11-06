@@ -12,8 +12,26 @@ const crypto = require('crypto');
 
 const TRIAL_DAYS = 15;
 
+/// Checks a Google OAuth access token (from the "Continue with Google" popup)
+/// really was issued to OUR client id, then returns the verified profile.
+async function verifyGoogleAccessToken(accessToken, clientId) {
+  const info = await (await fetch(
+    'https://oauth2.googleapis.com/tokeninfo?access_token=' + encodeURIComponent(accessToken))).json();
+  if (info.error || info.aud !== clientId) return null;
+  const profile = await (await fetch('https://openidconnect.googleapis.com/v1/userinfo', {
+    headers: { Authorization: 'Bearer ' + accessToken },
+  })).json();
+  if (!profile.email || profile.email_verified === false) return null;
+  return { email: profile.email, name: profile.name || '' };
+}
+
 /// requireSession(req, res) -> bool: the admin dashboard's session check from server.js.
-module.exports = function registerWebAccounts(app, db, { requireSession, tokenSecret }) {
+/// verifyGoogle is injectable for tests.
+module.exports = function registerWebAccounts(app, db, {
+  requireSession, tokenSecret,
+  googleClientId = process.env.GOOGLE_CLIENT_ID || '',
+  verifyGoogle = verifyGoogleAccessToken,
+}) {
   const TOKEN_SECRET = tokenSecret;
   if (!TOKEN_SECRET) throw new Error('Set WEB_TOKEN_SECRET (or ADMIN_KEY) env var');
 
@@ -128,7 +146,10 @@ module.exports = function registerWebAccounts(app, db, { requireSession, tokenSe
       if (password.length < 6) return res.json({ status: 'weak_password' });
 
       const ref = usersCol().doc(email);
-      if ((await ref.get()).exists) return res.json({ status: 'email_taken' });
+      const existing = await ref.get();
+      if (existing.exists) {
+        return res.json({ status: existing.data().hash ? 'email_taken' : 'use_google' });
+      }
 
       const { salt, hash } = hashPassword(password);
       const sessionId = crypto.randomUUID();
@@ -159,6 +180,7 @@ module.exports = function registerWebAccounts(app, db, { requireSession, tokenSe
       const doc = await usersCol().doc(email).get();
       if (!doc.exists) return res.json({ status: 'wrong_credentials' });
       const u = doc.data();
+      if (!u.hash) return res.json({ status: 'use_google' }); // Google-only account
       if (!checkPassword(req.body.password || '', u.salt, u.hash)) {
         return res.json({ status: 'wrong_credentials' });
       }
@@ -170,6 +192,48 @@ module.exports = function registerWebAccounts(app, db, { requireSession, tokenSe
       res.json({ status: 'ok', token: signToken(email, sessionId), account: entitlement(u) });
     } catch (e) {
       console.log('LOGIN ERROR:', e);
+      res.status(500).json({ status: 'server_error' });
+    }
+  });
+
+  /// Public config for the web app (the Google client id is not a secret).
+  app.get('/web/config', (req, res) => {
+    res.json({ googleClientId: googleClientId || null });
+  });
+
+  /// "Continue with Google": signs in, or creates the account on first use.
+  /// Google has already verified the email, so an existing password account
+  /// with the same email is simply signed in too.
+  app.post('/web/google', async (req, res) => {
+    try {
+      if (tooManyAttempts(req.ip)) return res.status(429).json({ status: 'too_many_attempts' });
+      if (!googleClientId) return res.json({ status: 'google_not_configured' });
+      const g = await verifyGoogle(String(req.body.accessToken || ''), googleClientId);
+      if (!g) return res.json({ status: 'google_failed' });
+
+      const email = normEmail(g.email);
+      const ref = usersCol().doc(email);
+      const doc = await ref.get();
+      const sessionId = crypto.randomUUID();
+      let u;
+      if (doc.exists) {
+        u = doc.data();
+        if (u.disabled) return res.json({ status: 'disabled' });
+        await ref.update({ sessionId, lastLoginAt: new Date(), lastIp: req.ip, google: true });
+        u.sessionId = sessionId;
+      } else {
+        u = {
+          email, name: String(g.name).slice(0, 80), phone: '', salt: null, hash: null,
+          google: true, sessionId,
+          createdAt: new Date(), lastLoginAt: new Date(), lastIp: req.ip,
+          trialStartedAt: null, trialFingerprint: null,
+          licenseKey: null, licenseExpiry: null, disabled: false,
+        };
+        await ref.set(u);
+      }
+      res.json({ status: 'ok', token: signToken(email, sessionId), account: entitlement(u) });
+    } catch (e) {
+      console.log('GOOGLE ERROR:', e);
       res.status(500).json({ status: 'server_error' });
     }
   });
