@@ -103,6 +103,7 @@
     <div class="tabs">
         <button class="tab-btn active" id="tabBtn-cdr_analyzer" onclick="switchTab('cdr_analyzer')">CDR Analyzer</button>
         <button class="tab-btn" id="tabBtn-extractor" onclick="switchTab('extractor')">Zooravar Extractor</button>
+        <button class="tab-btn" id="tabBtn-web_users" onclick="switchTab('web_users')">Web Users</button>
     </div>
 
     <div id="panel-cdr_analyzer" class="tab-panel">
@@ -146,6 +147,26 @@
             </tr>
             </thead>
             <tbody id="tableBody-extractor"></tbody>
+        </table>
+    </div>
+
+    <div id="panel-web_users" class="tab-panel" style="display:none;">
+        <p style="color:#94a3b8;">cdranalyser.netlify.app accounts. Free = 4 basic modules ·
+            Trial = everything for 15 days · Licensed = everything until expiry.
+            After a user pays, use a Grant button on their row (or send them a CDR Analyzer key).</p>
+        <table>
+            <thead>
+            <tr>
+                <th>Email</th>
+                <th>Name / Phone</th>
+                <th>Plan</th>
+                <th>Trial ends</th>
+                <th>License until</th>
+                <th>Last login</th>
+                <th>Actions</th>
+            </tr>
+            </thead>
+            <tbody id="tableBody-web_users"></tbody>
         </table>
     </div>
 
@@ -196,6 +217,7 @@
       document.getElementById("loginBox").style.display = "none";
       document.getElementById("dashboard").style.display = "block";
       loadLicenses();
+      loadWebUsers();
     }
 
     function logout() {
@@ -225,7 +247,7 @@
 
     /// 🔀 TABS
     function switchTab(product) {
-      for (const p of ["cdr_analyzer", "extractor"]) {
+      for (const p of ["cdr_analyzer", "extractor", "web_users"]) {
         document.getElementById(`panel-${p}`).style.display = (p === product) ? "block" : "none";
         document.getElementById(`tabBtn-${p}`).classList.toggle("active", p === product);
       }
@@ -406,7 +428,58 @@
       if (!sessionToken) return;
       if (document.activeElement && document.activeElement.tagName === "INPUT") return;
       loadLicenses();
+      loadWebUsers();
     }, 5000);
+
+    /// 🌐 WEB USERS
+    // Names/emails are typed by the public - always escape before inserting into HTML.
+    const esc = (v) => String(v ?? "").replace(/[&<>"']/g,
+      (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    const toD = (d) => d && d._seconds ? new Date(d._seconds * 1000) : (d ? new Date(d) : null);
+    const fmtD = (d) => d === "lifetime" ? "LIFETIME" : (d ? toD(d).toLocaleDateString() : "-");
+
+    async function loadWebUsers() {
+      let res = await fetch(`${baseUrl}/web/users`, { headers: authHeaders() });
+      res = await handleAuthResponse(res);
+      if (!res || !res.ok) return;
+      const users = await res.json();
+      users.sort((a, b) => (toD(b.createdAt) || 0) - (toD(a.createdAt) || 0));
+
+      document.getElementById("tableBody-web_users").innerHTML = users.map((u) => {
+        const cls = u.disabled ? "revoked" : u.plan === "licensed" ? "lifetime" : u.plan === "trial" ? "active" : "expired";
+        const e = esc(u.email);
+        return `
+          <tr>
+            <td>${e}</td>
+            <td>${esc(u.name)}<br><small>${esc(u.phone)}</small></td>
+            <td class="${cls}">${u.disabled ? "DISABLED" : esc(u.plan).toUpperCase()}</td>
+            <td>${fmtD(u.trialEndsAt)}</td>
+            <td>${fmtD(u.licenseExpiry)}</td>
+            <td>${fmtD(u.lastLoginAt)}</td>
+            <td>
+              <button onclick="webAction('${e}','grant','30')">+30d</button>
+              <button onclick="webAction('${e}','grant','90')">+90d</button>
+              <button onclick="webAction('${e}','grant','lifetime')">Lifetime</button>
+              <button class="danger" onclick="webAction('${e}','remove_license')">Remove license</button>
+              <button onclick="webAction('${e}','reset_trial')">Reset trial</button>
+              <button class="danger" onclick="webAction('${e}','${u.disabled ? "enable" : "disable"}')">${u.disabled ? "Enable" : "Disable"}</button>
+            </td>
+          </tr>`;
+      }).join("");
+    }
+
+    async function webAction(email, action, days) {
+      if (!confirm(`${action.replace("_", " ")}${days ? " " + days : ""} for ${email}?`)) return;
+      let res = await fetch(`${baseUrl}/web/users/update`, {
+        method: "POST",
+        headers: authHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ email, action, days })
+      });
+      res = await handleAuthResponse(res);
+      if (res && !res.ok) alert("Failed: " + (await res.text()));
+      loadWebUsers();
+      loadLicenses();
+    }
 
 </script>
 

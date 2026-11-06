@@ -15,6 +15,7 @@ const crypto = require('crypto');
 const { v4: uuidv4 } = require('uuid');
 
 const app = express();
+app.set('trust proxy', 1); // real client IP behind Render's proxy (login rate limiting)
 app.use(cors());
 app.use(bodyParser.json());
 app.use(express.static('public'));
@@ -326,6 +327,13 @@ app.get('/test', async (req, res) => {
     console.log("TEST ERROR:", e);
     res.status(500).json({ error: "server_error" });
   }
+});
+
+
+/// 🌐 WEB ACCOUNTS (free / 15-day trial / licensed — cdranalyser.netlify.app)
+require('./web_accounts')(app, db, {
+  requireSession,
+  tokenSecret: process.env.WEB_TOKEN_SECRET || ADMIN_PASSWORD,
 });
 
 
