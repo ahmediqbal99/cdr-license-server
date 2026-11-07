@@ -5,6 +5,19 @@
     <title>License Admin</title>
 
     <style>
+        .copy-btn {
+          background: transparent;
+          border: 1px solid #334155;
+          color: #94a3b8;
+          padding: 1px 5px;
+          margin: 0 0 0 4px;
+          font-size: 13px;
+          line-height: 1.2;
+          vertical-align: middle;
+        }
+        .copy-btn:hover { color: white; border-color: #64748b; }
+        .copy-btn.copied { color: lightgreen; border-color: lightgreen; }
+        .key-text { font-family: monospace; font-size: 1.05em; }
         body {
           font-family: Arial;
           background: #0f172a;
@@ -272,6 +285,26 @@
       return res;
     }
 
+    /// 📋 COPY — small button placed beside keys/emails
+    function copyBtn(text) {
+      return `<button type="button" class="copy-btn" title="Copy" data-copy="${esc(text)}" onclick="copyText(this)">⧉</button>`;
+    }
+
+    async function copyText(btn) {
+      const text = btn.dataset.copy;
+      try {
+        await navigator.clipboard.writeText(text);
+      } catch (e) {
+        // fallback for browsers that block the clipboard API
+        const ta = document.createElement("textarea");
+        ta.value = text; document.body.appendChild(ta); ta.select();
+        document.execCommand("copy"); ta.remove();
+      }
+      btn.textContent = "✓";
+      btn.classList.add("copied");
+      setTimeout(() => { btn.textContent = "⧉"; btn.classList.remove("copied"); }, 1500);
+    }
+
     /// 🔀 TABS
     function switchTab(product) {
       for (const p of ["cdr_analyzer", "extractor", "cdr_web"]) {
@@ -291,7 +324,8 @@
 
       const data = await res.json();
 
-      document.getElementById(`newKey-${product}`).innerText = "New Key: " + data.key;
+      document.getElementById(`newKey-${product}`).innerHTML =
+        `New Key: <span class="key-text">${data.key}</span>${copyBtn(data.key)}`;
 
       loadLicenses();
     }
@@ -359,7 +393,7 @@
 
         const row = `
           <tr>
-            <td>${l.key}</td>
+            <td style="white-space:nowrap"><span class="key-text">${l.key}</span>${copyBtn(l.key)}</td>
             <td>
               <div class="name-cell">
                 <input type="text" id="name-${l.key}" value="${esc(l.name || "")}" placeholder="Who holds this?">
@@ -477,7 +511,7 @@
         const e = esc(u.email);
         return `
           <tr>
-            <td>${e}</td>
+            <td style="white-space:nowrap">${e}${copyBtn(u.email)}</td>
             <td>${esc(u.name)}<br><small>${esc(u.phone)}</small></td>
             <td class="${cls}">${u.disabled ? "DISABLED" : esc(u.plan).toUpperCase()}</td>
             <td>${fmtD(u.trialEndsAt)}</td>
