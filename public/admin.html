@@ -101,9 +101,9 @@
     <h2>🔑 License Dashboard <button class="danger" onclick="logout()" style="float:right; font-size: 0.5em;">Logout</button></h2>
 
     <div class="tabs">
-        <button class="tab-btn active" id="tabBtn-cdr_analyzer" onclick="switchTab('cdr_analyzer')">CDR Analyzer</button>
+        <button class="tab-btn active" id="tabBtn-cdr_analyzer" onclick="switchTab('cdr_analyzer')">CDR Analyzer (Desktop)</button>
         <button class="tab-btn" id="tabBtn-extractor" onclick="switchTab('extractor')">Zooravar Extractor</button>
-        <button class="tab-btn" id="tabBtn-web_users" onclick="switchTab('web_users')">Web Users</button>
+        <button class="tab-btn" id="tabBtn-cdr_web" onclick="switchTab('cdr_web')">CDR Analyzer (Website)</button>
     </div>
 
     <div id="panel-cdr_analyzer" class="tab-panel">
@@ -150,10 +150,15 @@
         </table>
     </div>
 
-    <div id="panel-web_users" class="tab-panel" style="display:none;">
-        <p style="color:#94a3b8;">cdranalyser.netlify.app accounts. Free = 4 basic modules ·
-            Trial = everything for 15 days · Licensed = everything until expiry.
-            After a user pays, use a Grant button on their row (or send them a CDR Analyzer key).</p>
+    <div id="panel-cdr_web" class="tab-panel" style="display:none;">
+        <p style="color:#94a3b8;">Licenses for <b>cdranalyser.netlify.app</b> only. These keys don't work in the
+            desktop app, and desktop keys don't work on the website.
+            Free = 4 basic modules · Trial = everything for 15 days · Licensed = everything until expiry.</p>
+
+        <h3>👤 Website users</h3>
+        <p style="color:#94a3b8;">When a user pays for the month, click <b>+1 month</b> on their row. If they renew
+            before expiry, the month is added on top of the remaining days. If they don't pay, the account goes
+            back to the free modules automatically when the date passes.</p>
         <table>
             <thead>
             <tr>
@@ -167,6 +172,28 @@
             </tr>
             </thead>
             <tbody id="tableBody-web_users"></tbody>
+        </table>
+
+        <h3 style="margin-top:32px;">🔑 Website license keys</h3>
+        <p style="color:#94a3b8;">Or generate a key and send it; the user enters it under Unlock Premium.</p>
+        <button onclick="generate('cdr_web', '30')">Generate 1 Month</button>
+        <button onclick="generate('cdr_web', '90')">Generate 3 Months</button>
+        <button onclick="generate('cdr_web', 'lifetime')">Lifetime</button>
+
+        <h3 id="newKey-cdr_web"></h3>
+
+        <table>
+            <thead>
+            <tr>
+                <th>Key</th>
+                <th>Name</th>
+                <th>Account</th>
+                <th>Status</th>
+                <th>Expiry</th>
+                <th>Action</th>
+            </tr>
+            </thead>
+            <tbody id="tableBody-cdr_web"></tbody>
         </table>
     </div>
 
@@ -247,7 +274,7 @@
 
     /// 🔀 TABS
     function switchTab(product) {
-      for (const p of ["cdr_analyzer", "extractor", "web_users"]) {
+      for (const p of ["cdr_analyzer", "extractor", "cdr_web"]) {
         document.getElementById(`panel-${p}`).style.display = (p === product) ? "block" : "none";
         document.getElementById(`tabBtn-${p}`).classList.toggle("active", p === product);
       }
@@ -283,9 +310,9 @@
       const bodies = {
         cdr_analyzer: document.getElementById("tableBody-cdr_analyzer"),
         extractor: document.getElementById("tableBody-extractor"),
+        cdr_web: document.getElementById("tableBody-cdr_web"),
       };
-      bodies.cdr_analyzer.innerHTML = "";
-      bodies.extractor.innerHTML = "";
+      Object.values(bodies).forEach((b) => b.innerHTML = "");
 
       data.forEach(l => {
 
@@ -335,11 +362,11 @@
             <td>${l.key}</td>
             <td>
               <div class="name-cell">
-                <input type="text" id="name-${l.key}" value="${(l.name || "").replace(/"/g, '&quot;')}" placeholder="Who holds this?">
+                <input type="text" id="name-${l.key}" value="${esc(l.name || "")}" placeholder="Who holds this?">
                 <button onclick="saveName('${safeKey}')">Save</button>
               </div>
             </td>
-            <td>${l.device_id || "-"}</td>
+            <td>${esc(l.device_id || "-")}</td>
             <td class="${statusClass}">${statusText}</td>
             <td>${expiryText}</td>
             <td>
@@ -433,8 +460,8 @@
 
     /// 🌐 WEB USERS
     // Names/emails are typed by the public - always escape before inserting into HTML.
-    const esc = (v) => String(v ?? "").replace(/[&<>"']/g,
-      (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    function esc(v) { return String(v ?? "").replace(/[&<>"']/g,
+      (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
     const toD = (d) => d && d._seconds ? new Date(d._seconds * 1000) : (d ? new Date(d) : null);
     const fmtD = (d) => d === "lifetime" ? "LIFETIME" : (d ? toD(d).toLocaleDateString() : "-");
 
@@ -457,8 +484,8 @@
             <td>${fmtD(u.licenseExpiry)}</td>
             <td>${fmtD(u.lastLoginAt)}</td>
             <td>
-              <button onclick="webAction('${e}','grant','30')">+30d</button>
-              <button onclick="webAction('${e}','grant','90')">+90d</button>
+              <button onclick="webAction('${e}','grant','30')">+1 month</button>
+              <button onclick="webAction('${e}','grant','90')">+3 months</button>
               <button onclick="webAction('${e}','grant','lifetime')">Lifetime</button>
               <button class="danger" onclick="webAction('${e}','remove_license')">Remove license</button>
               <button onclick="webAction('${e}','reset_trial')">Reset trial</button>
@@ -469,7 +496,8 @@
     }
 
     async function webAction(email, action, days) {
-      if (!confirm(`${action.replace("_", " ")}${days ? " " + days : ""} for ${email}?`)) return;
+      const label = action === "grant" ? (days === "lifetime" ? "Grant LIFETIME license" : `Add ${days === "30" ? "1 month" : "3 months"}`) : action.replace("_", " ");
+      if (!confirm(`${label} for ${email}?`)) return;
       let res = await fetch(`${baseUrl}/web/users/update`, {
         method: "POST",
         headers: authHeaders({ "Content-Type": "application/json" }),

@@ -12,6 +12,11 @@ const crypto = require('crypto');
 
 const TRIAL_DAYS = 15;
 
+/// Website licenses are their own product, separate from desktop
+/// (cdr_analyzer) and Extractor keys: a desktop key can't unlock the
+/// website and a website key can't activate the desktop app.
+const WEB_PRODUCT = 'cdr_web';
+
 /// Checks a Google OAuth access token (from the "Continue with Google" popup)
 /// really was issued to OUR client id, then returns the verified profile.
 async function verifyGoogleAccessToken(accessToken, clientId) {
@@ -39,7 +44,7 @@ module.exports = function registerWebAccounts(app, db, {
   const fpCol = () => db.collection('web_trial_fingerprints');
 
   const normEmail = (e) => String(e || '').trim().toLowerCase();
-  const validEmail = (e) => /^[^\s@/]+@[^\s@/]+\.[^\s@/]{2,}$/.test(e) && e.length <= 120;
+  const validEmail = (e) => /^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$/.test(e) && e.length <= 120; // strict: emails are shown in admin HTML
   const toDate = (v) => (v ? (v.toDate ? v.toDate() : new Date(v)) : null);
 
   function hashPassword(password, salt = crypto.randomBytes(16).toString('hex')) {
@@ -125,6 +130,7 @@ module.exports = function registerWebAccounts(app, db, {
       if (u.licenseKey) {
         const lic = await db.collection('licenses').doc(u.licenseKey).get();
         if (!lic.exists || lic.data().status === 'revoked') u.licenseStatus = 'revoked';
+        else u.licenseExpiry = lic.data().expiry || null; // admin Renew on the key applies
       }
       req.user = u;
       req.userRef = doc.ref;
@@ -284,7 +290,9 @@ module.exports = function registerWebAccounts(app, db, {
       const lic = doc.data();
       if (lic.status === 'revoked') return res.json({ status: 'revoked' });
       // Extractor keys must not unlock the CDR Analyzer web app.
-      if ((lic.product || 'cdr_analyzer') !== 'cdr_analyzer') return res.json({ status: 'wrong_product' });
+      if (lic.product !== WEB_PRODUCT && lic.device_id !== `web:${req.user.email}`) {
+        return res.json({ status: 'wrong_product' });
+      }
       const exp = toDate(lic.expiry);
       if (exp && new Date() > exp) return res.json({ status: 'expired' });
 
@@ -306,11 +314,17 @@ module.exports = function registerWebAccounts(app, db, {
     if (!requireSession(req, res)) return;
     try {
       const snap = await usersCol().get();
+      const lics = {};
+      (await db.collection('licenses').get()).docs.forEach((d) => { lics[d.data().key] = d.data(); });
       res.json(snap.docs.map((d) => {
         const u = d.data();
+        const lic = u.licenseKey && lics[u.licenseKey];
+        if (u.licenseKey && (!lic || lic.status === 'revoked')) u.licenseStatus = 'revoked';
+        else if (lic) u.licenseExpiry = lic.expiry || null;
         return {
           ...entitlement(u),
           phone: u.phone || '',
+          licenseKey: u.licenseKey || null,
           disabled: !!u.disabled,
           createdAt: toDate(u.createdAt),
           lastLoginAt: toDate(u.lastLoginAt),
@@ -334,18 +348,38 @@ module.exports = function registerWebAccounts(app, db, {
 
       switch (req.body.action) {
         case 'grant': {
+          // Monthly renewal: if the user's website license is still running,
+          // the new time is added on top of its current expiry (paying early
+          // loses no days); otherwise it starts today. Same key is reused.
           const days = String(req.body.days || '30');
-          const key = 'WEB' + crypto.randomBytes(5).toString('hex').toUpperCase();
+          let key = null;
+          let from = new Date();
+          if (u.licenseKey) {
+            const cur = await db.collection('licenses').doc(u.licenseKey).get();
+            if (cur.exists && cur.data().status !== 'revoked' && cur.data().product === WEB_PRODUCT) {
+              key = u.licenseKey;
+              const curExp = toDate(cur.data().expiry);
+              if (!curExp && days !== 'lifetime') {
+                return res.status(400).json({ error: 'User already has a lifetime license' });
+              }
+              if (curExp && curExp > from) from = curExp;
+            }
+          }
           let expiry = null;
           if (days !== 'lifetime') {
-            expiry = new Date();
+            expiry = new Date(from.getTime());
             expiry.setDate(expiry.getDate() + (parseInt(days, 10) || 30));
           }
-          await db.collection('licenses').doc(key).set({
-            key, device_id: `web:${email}`, status: 'active', expiry,
-            type: days, product: 'cdr_analyzer', name: u.name || email,
-            createdAt: new Date(),
-          });
+          if (key) {
+            await db.collection('licenses').doc(key).update({ expiry, type: days });
+          } else {
+            key = 'WEB' + crypto.randomBytes(5).toString('hex').toUpperCase();
+            await db.collection('licenses').doc(key).set({
+              key, device_id: `web:${email}`, status: 'active', expiry,
+              type: days, product: WEB_PRODUCT, name: u.name || email,
+              createdAt: new Date(),
+            });
+          }
           await ref.update({ licenseKey: key, licenseExpiry: expiry });
           break;
         }
@@ -354,6 +388,10 @@ module.exports = function registerWebAccounts(app, db, {
           if (u.trialFingerprint) await fpCol().doc(u.trialFingerprint).delete();
           break;
         case 'remove_license':
+          if (u.licenseKey) {
+            const cur = await db.collection('licenses').doc(u.licenseKey).get();
+            if (cur.exists) await cur.ref.update({ status: 'revoked' });
+          }
           await ref.update({ licenseKey: null, licenseExpiry: null });
           break;
         case 'disable':
